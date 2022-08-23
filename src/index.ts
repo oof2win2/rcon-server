@@ -31,6 +31,16 @@ type Message = BaseMessage & {
 };
 
 class RCONServer {
+  private listener: Deno.Listener;
+  constructor(
+    private host: string,
+    private port: number,
+    private password: string
+  ) {
+    this.listener = Deno.listen({ port: this.port, hostname: this.host });
+    this.listen();
+  }
+
   private generateId() {
     const id = new Uint32Array(1);
     crypto.getRandomValues(id);
@@ -62,5 +72,55 @@ class RCONServer {
       body,
       size,
     };
+  }
+
+  private async listen() {
+    for await (const conn of this.listener) {
+      this.handleConnection(conn);
+    }
+  }
+
+  private async handleConnection(conn: Deno.Conn) {
+    const authBuf = new Uint8Array(
+      4 + 4 + 4 + Buffer.byteLength(this.password) + 2
+    );
+    await conn.read(authBuf);
+    const authMessage = this.readResponse(Buffer.from(authBuf));
+
+    if (authMessage.type !== MessageType.SERVERDATA_AUTH) {
+      // invalid initial message type
+      conn.close();
+      return;
+    }
+
+    // send empty auth response value
+    await conn.write(
+      this.writeMessage({
+        id: authMessage.id,
+        type: MessageType.SERVERDATA_RESPONSE_VALUE,
+        body: "",
+      })
+    );
+    if (authMessage.body !== this.password) {
+      // invalid password
+      await conn.write(
+        this.writeMessage({
+          id: -1,
+          type: MessageType.SERVERDATA_AUTH_RESPONSE,
+          body: "",
+        })
+      );
+      conn.close();
+      return;
+    } else {
+      // valid password, send successful auth response
+      await conn.write(
+        this.writeMessage({
+          id: authMessage.id,
+          type: MessageType.SERVERDATA_AUTH_RESPONSE,
+          body: "",
+        })
+      );
+    }
   }
 }
