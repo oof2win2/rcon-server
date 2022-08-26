@@ -1,4 +1,6 @@
 import { Buffer } from "https://deno.land/std@0.152.0/node/buffer.ts";
+import { EventEmitter } from "https://deno.land/x/eventemitter@1.2.1/mod.ts";
+import { iterateReader } from "https://deno.land/std@0.153.0/streams/conversion.ts";
 
 // // NaN is falsy, so will always
 // let port: number;
@@ -30,13 +32,34 @@ type Message = BaseMessage & {
   size: number;
 };
 
-class RCONServer {
+type RCONServerListeners = {
+  /**
+   * Emitted when the server is listening for connections.
+   * @event RCONServer#connection
+   * @param {number} clientId The ID of the client
+   */
+  connection: (clientId: number) => void;
+  /**
+   * Emitted when the server receives a request from a client
+   * @event RCONServer#request
+   * @param {number} clientId The ID of the client
+   * @param {Message} message The message received from the client
+   */
+  request: (clientId: number, message: Message) => void;
+  close: (clientId: number) => void;
+  unreplied: (clientId: number, message: Message) => void;
+};
+
+class RCONServer extends EventEmitter<RCONServerListeners> {
   private listener: Deno.Listener;
+  private connections: Map<number, Deno.Conn> = new Map();
+  // private _unreplied: Map<number, Message[]> = new Map();
   constructor(
     private host: string,
     private port: number,
     private password: string
   ) {
+    super();
     this.listener = Deno.listen({ port: this.port, hostname: this.host });
     this.listen();
   }
@@ -122,5 +145,48 @@ class RCONServer {
         })
       );
     }
+    this.emit("connection", conn.rid);
+    this.connections.set(conn.rid, conn);
+
+    try {
+      for await (const buffer of iterateReader(conn)) {
+        const message = this.readResponse(Buffer.from(buffer));
+        if (message.type === MessageType.SERVERDATA_EXECCOMMAND) {
+          this.emit("request", conn.rid, message);
+        } else if (message.type === MessageType.SERVERDATA_RESPONSE_VALUE) {
+          // response from client is an echo
+          conn.write(buffer);
+        }
+      }
+      this.closeConnection(conn.rid);
+    } catch (e) {
+      if (e instanceof Deno.errors.BadResource) {
+        this.closeConnection(conn.rid);
+      }
+    }
+  }
+
+  closeConnection(rid: number) {
+    const conn = this.connections.get(rid);
+    if (conn) {
+      conn.close();
+      this.connections.delete(rid);
+      this.emit("close", rid);
+    }
+  }
+
+  async reply(rid: number, reqId: number, body: string) {
+    const conn = this.connections.get(rid);
+    if (!conn) {
+      throw new Error("Connection not found");
+    }
+    const message = this.writeMessage({
+      id: reqId,
+      type: MessageType.SERVERDATA_RESPONSE_VALUE,
+      body,
+    });
+    await conn.write(message);
   }
 }
+
+export default RCONServer;
