@@ -32,15 +32,38 @@ type RCONServerListeners = {
    * @param {Message} message The message received from the client
    */
   request: (clientId: number, message: Message) => void;
+  /**
+   * Emitted when a c;lient disconnects from the server
+   * @event RCONServer#disconnect
+   * @param {number} clientId The ID of the client
+   */
   close: (clientId: number) => void;
+  /**
+   * Emitted periodically to report any messages which have not been handled yet
+   * @event RCONServer#unhandled
+   * @param {number} clientId The ID of the client
+   * @param {Message} message The message received from the client
+   */
   unreplied: (clientId: number, message: Message) => void;
 };
 
+/**
+ * A class for creating a RCON server
+ */
 class RCONServer extends EventEmitter<RCONServerListeners> {
+  /**
+   * TCP socket for the server
+   */
   private listener: Deno.Listener;
+  /**
+   * Private map of IDs to connections
+   */
   private connections: Map<number, Deno.Conn> = new Map();
-  unreplied: Map<number, Message[]> = new Map();
   private unrepliedInterval: number;
+  /**
+   * Unreplied messages that can be checked through manually
+   */
+  unreplied: Map<number, Message[]> = new Map();
 
   constructor(
     private host: string,
@@ -53,12 +76,21 @@ class RCONServer extends EventEmitter<RCONServerListeners> {
     this.unrepliedInterval = setInterval(this.notifyUnreplied, 60 * 1000);
   }
 
-  private generateId() {
+  /**
+   * Generates a random ID for a message
+   * @returns {number} The next ID to use for a message
+   */
+  private generateId(): number {
     const id = new Uint32Array(1);
     crypto.getRandomValues(id);
     return id[0];
   }
 
+  /**
+   * Writes a message object to a buffer
+   * @param message The message to send to the client
+   * @returns {Buffer} The bytes to send to the client
+   */
   private writeMessage(message: BaseMessage): Buffer {
     const bodySize = Buffer.byteLength(message.body);
     const buffer = Buffer.alloc(bodySize + 14);
@@ -72,6 +104,11 @@ class RCONServer extends EventEmitter<RCONServerListeners> {
     return buffer;
   }
 
+  /**
+   * Reads a buffer and returns a message object
+   * @param buffer The message that was received from the client
+   * @returns {Message} The message object
+   */
   private readResponse(buffer: Buffer): Message {
     const size = buffer.readInt32LE(0);
     const id = buffer.readInt32LE(4);
@@ -92,6 +129,9 @@ class RCONServer extends EventEmitter<RCONServerListeners> {
     }
   }
 
+  /**
+   * Handle a connection, from authentication to handling messages
+   */
   private async handleConnection(conn: Deno.Conn) {
     const authBuf = new Uint8Array(
       4 + 4 + 4 + Buffer.byteLength(this.password) + 2
@@ -157,6 +197,10 @@ class RCONServer extends EventEmitter<RCONServerListeners> {
     }
   }
 
+  /**
+   * Closes a connection
+   * @param rid The ID of the connection to close
+   */
   closeConnection(rid: number) {
     const conn = this.connections.get(rid);
     if (conn) {
@@ -167,6 +211,12 @@ class RCONServer extends EventEmitter<RCONServerListeners> {
     }
   }
 
+  /**
+   * Reply to a request sent by a client
+   * @param rid The ID of the connection to reply to
+   * @param reqId The ID of the request to reply to
+   * @param body The message body to send
+   */
   async reply(rid: number, reqId: number, body: string) {
     const conn = this.connections.get(rid);
     if (!conn) {
@@ -186,6 +236,9 @@ class RCONServer extends EventEmitter<RCONServerListeners> {
     }
   }
 
+  /**
+   * Emit events about unreplied messages
+   */
   notifyUnreplied() {
     for (const [rid, messages] of this.unreplied) {
       for (const message of messages) {
@@ -194,6 +247,9 @@ class RCONServer extends EventEmitter<RCONServerListeners> {
     }
   }
 
+  /**
+   * Destroy (close) the server
+   */
   destroy() {
     this.listener.close();
     clearTimeout(this.unrepliedInterval);
