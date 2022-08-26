@@ -50,7 +50,7 @@ type RCONServerListeners = {
 /**
  * A class for creating a RCON server
  */
-class RCONServer extends EventEmitter<RCONServerListeners> {
+export default class RCONServer extends EventEmitter<RCONServerListeners> {
   /**
    * TCP socket for the server
    */
@@ -255,5 +255,3 @@ class RCONServer extends EventEmitter<RCONServerListeners> {
     clearTimeout(this.unrepliedInterval);
   }
 }
-
-export default RCONServer;
