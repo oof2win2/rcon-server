@@ -2,20 +2,6 @@ import { Buffer } from "https://deno.land/std@0.152.0/node/buffer.ts";
 import { EventEmitter } from "https://deno.land/x/eventemitter@1.2.1/mod.ts";
 import { iterateReader } from "https://deno.land/std@0.153.0/streams/conversion.ts";
 
-// // NaN is falsy, so will always
-// let port: number;
-// {
-//   const envPort = Number(Deno.env.get("port"));
-//   port = envPort;
-//   if (isNaN(envPort)) {
-//     port = 27015;
-//   } else if (envPort < 1024 || envPort > 65535) {
-//     port = 27015;
-//   }
-// }
-// const ENV_PASSWORD = Deno.env.get("PASSWORD");
-// if (!ENV_PASSWORD) throw new Error("Password is not set");
-
 enum MessageType {
   SERVERDATA_RESPONSE_VALUE = 0,
   SERVERDATA_EXECCOMMAND = 2,
@@ -53,7 +39,9 @@ type RCONServerListeners = {
 class RCONServer extends EventEmitter<RCONServerListeners> {
   private listener: Deno.Listener;
   private connections: Map<number, Deno.Conn> = new Map();
-  // private _unreplied: Map<number, Message[]> = new Map();
+  unreplied: Map<number, Message[]> = new Map();
+  private unrepliedInterval: number;
+
   constructor(
     private host: string,
     private port: number,
@@ -62,6 +50,7 @@ class RCONServer extends EventEmitter<RCONServerListeners> {
     super();
     this.listener = Deno.listen({ port: this.port, hostname: this.host });
     this.listen();
+    this.unrepliedInterval = setInterval(this.notifyUnreplied, 60 * 1000);
   }
 
   private generateId() {
@@ -147,12 +136,14 @@ class RCONServer extends EventEmitter<RCONServerListeners> {
     }
     this.emit("connection", conn.rid);
     this.connections.set(conn.rid, conn);
+    this.unreplied.set(conn.rid, []);
 
     try {
       for await (const buffer of iterateReader(conn)) {
         const message = this.readResponse(Buffer.from(buffer));
         if (message.type === MessageType.SERVERDATA_EXECCOMMAND) {
           this.emit("request", conn.rid, message);
+          this.unreplied.get(conn.rid)?.push(message);
         } else if (message.type === MessageType.SERVERDATA_RESPONSE_VALUE) {
           // response from client is an echo
           conn.write(buffer);
@@ -172,6 +163,7 @@ class RCONServer extends EventEmitter<RCONServerListeners> {
       conn.close();
       this.connections.delete(rid);
       this.emit("close", rid);
+      this.unreplied.delete(rid);
     }
   }
 
@@ -186,6 +178,25 @@ class RCONServer extends EventEmitter<RCONServerListeners> {
       body,
     });
     await conn.write(message);
+    // remove from unreplied
+    const unreplied = this.unreplied.get(rid);
+    if (unreplied) {
+      const filtered = unreplied.filter((m) => m.id !== reqId);
+      this.unreplied.set(rid, filtered);
+    }
+  }
+
+  notifyUnreplied() {
+    for (const [rid, messages] of this.unreplied) {
+      for (const message of messages) {
+        this.emit("unreplied", rid, message);
+      }
+    }
+  }
+
+  destroy() {
+    this.listener.close();
+    clearTimeout(this.unrepliedInterval);
   }
 }
 
