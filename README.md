@@ -7,7 +7,7 @@ A Deno implementation for an RCON server.
 Below is a simple example of how to use the RCON server to send an echo.
 
 ```ts
-import Server from "https://deno.land/x/rcon_server@v1.0.0/mod.ts";
+import Server from "https://deno.land/x/rcon_server@v1.0.1/mod.ts";
 
 const server = new Server("localhost", 27015, "password");
 
